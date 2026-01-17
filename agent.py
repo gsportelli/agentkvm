@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
@@ -334,15 +335,36 @@ class ActionHistory:
             json.dump(self.data, f, indent=2)
 
     def add_action(self, iteration: int, observation: str, reasoning: str,
-                   command: str, result: str):
+                   commands: List[str], results: List[Tuple[str, bool, str]]):
+        """Add an action (possibly multi-command) to history.
+
+        Args:
+            iteration: Current iteration number
+            observation: What was observed on screen
+            reasoning: LLM's reasoning
+            commands: List of commands that were planned
+            results: List of (command, success, result) tuples for executed commands
+        """
         self.data["iterations"] = iteration
+
+        # Format commands and results for storage
+        commands_str = " ; ".join(commands) if len(commands) > 1 else (commands[0] if commands else "")
+        results_summary = []
+        for cmd, success, res in results:
+            status = "OK" if success else "FAIL"
+            results_summary.append(f"[{status}] {res[:50]}")
+        results_str = " | ".join(results_summary) if results_summary else "No execution"
+
         self.data["actions"].append({
             "iteration": iteration,
             "timestamp": datetime.now().isoformat(),
             "observation": observation,
             "reasoning": reasoning,
-            "command": command,
-            "result": result
+            "commands": commands,
+            "commands_count": len(commands),
+            "executed_count": len(results),
+            "all_succeeded": all(r[1] for r in results) if results else False,
+            "result_summary": results_str
         })
         self._save()
 
@@ -350,8 +372,16 @@ class ActionHistory:
             f.write(f"\n### Iteration {iteration} ({datetime.now().strftime('%H:%M:%S')})\n")
             f.write(f"**Observation:** {observation}\n")
             f.write(f"**Reasoning:** {reasoning}\n")
-            f.write(f"**Command:** `{command}`\n")
-            f.write(f"**Result:** {result}\n")
+            f.write(f"**Commands ({len(commands)}):**\n")
+            for i, cmd in enumerate(commands):
+                executed = i < len(results)
+                if executed:
+                    success = results[i][1]
+                    status = "OK" if success else "FAIL"
+                    f.write(f"  {i+1}. `{cmd}` [{status}]\n")
+                else:
+                    f.write(f"  {i+1}. `{cmd}` [NOT EXECUTED]\n")
+            f.write(f"**Result:** {results_str}\n")
 
     def mark_completed(self):
         self.data["status"] = "completed"
@@ -373,10 +403,28 @@ class ActionHistory:
         if actions:
             lines.append(f"Recent actions (last {len(actions)}):")
             for a in actions:
-                lines.append(f"  [{a['iteration']}] {a['command']}")
-                if a["result"]:
-                    lines.append(f"      Result: {a['result'][:100]}...")
-                lines.append(f"      Reasoning: {a['reasoning'][:150]}...")
+                # Handle both old single-command format and new multi-command format
+                if "commands" in a:
+                    cmd_count = a.get("commands_count", len(a["commands"]))
+                    exec_count = a.get("executed_count", cmd_count)
+                    cmds = a["commands"]
+                    if cmd_count == 1:
+                        lines.append(f"  [{a['iteration']}] {cmds[0]}")
+                    else:
+                        lines.append(f"  [{a['iteration']}] {cmd_count} commands ({exec_count} executed):")
+                        for cmd in cmds[:3]:  # Show first 3
+                            lines.append(f"      - {cmd[:60]}...")
+                    result = a.get("result_summary", "")
+                else:
+                    # Legacy format
+                    lines.append(f"  [{a['iteration']}] {a.get('command', 'N/A')}")
+                    result = a.get("result", "")
+
+                if result:
+                    lines.append(f"      Result: {result[:100]}...")
+                reasoning = a.get("reasoning", "")
+                if reasoning:
+                    lines.append(f"      Reasoning: {reasoning[:150]}...")
         else:
             lines.append("No actions taken yet.")
 
@@ -424,16 +472,32 @@ Respond with exactly these three blocks:
 <What you observe in the screenshot - 1-2 sentences>
 
 ###THINK
-<Your reasoning about what to do next - 2-3 sentences>
+<Your reasoning about what to do next. Plan a sequence of actions if you're confident about multiple steps.>
 
 ###CMD
-<ONE command line only - must start with 'cliclick' or 'osascript'>
+<One command per line, 1-5 commands total. Each must start with 'cliclick' or 'osascript'>
 
 Rules:
-- ###CMD must be exactly ONE line starting with 'cliclick' or 'osascript'
-- No semicolons, pipes, redirects, or command chaining
+- ###CMD can have 1 to 5 commands, ONE PER LINE
+- Each command must start with 'cliclick' or 'osascript'
+- Use multiple commands when you're CONFIDENT about a sequence (e.g., click then type)
+- Use single command when outcome is uncertain or needs visual verification
+- No semicolons, pipes, redirects, or command chaining within a line
+- Commands execute sequentially with a small delay between them
 - If goal is achieved, write: cliclick kp:escape
-  And include "GOAL ACHIEVED" at the start of ###OBS"""
+  And include "GOAL ACHIEVED" at the start of ###OBS
+
+Examples of multi-command sequences:
+###CMD
+cliclick c:500,300
+cliclick t:"hello world"
+cliclick kp:enter
+
+###CMD
+osascript -e 'tell application "Safari" to activate'
+cliclick kp:cmd-l
+cliclick t:"https://google.com"
+cliclick kp:enter"""
 
 
 def build_prompt_linux(goal: str, history_context: str, width: int, height: int) -> str:
@@ -484,16 +548,32 @@ Respond with exactly these three blocks:
 <What you observe in the screenshot - 1-2 sentences>
 
 ###THINK
-<Your reasoning about what to do next - 2-3 sentences>
+<Your reasoning about what to do next. Plan a sequence of actions if you're confident about multiple steps.>
 
 ###CMD
-<ONE command line only - must start with 'xdotool', 'wmctrl', or 'xclip'>
+<One command per line, 1-5 commands total. Each must start with 'xdotool', 'wmctrl', or 'xclip'>
 
 Rules:
-- ###CMD must be exactly ONE line starting with 'xdotool', 'wmctrl', or 'xclip'
-- No semicolons, pipes, redirects, or command chaining (except for xclip with echo)
+- ###CMD can have 1 to 5 commands, ONE PER LINE
+- Each command must start with 'xdotool', 'wmctrl', or 'xclip'
+- Use multiple commands when you're CONFIDENT about a sequence (e.g., click then type)
+- Use single command when outcome is uncertain or needs visual verification
+- No semicolons, pipes, redirects, or command chaining within a line (except echo | xclip)
+- Commands execute sequentially with a small delay between them
 - If goal is achieved, write: xdotool key Escape
-  And include "GOAL ACHIEVED" at the start of ###OBS"""
+  And include "GOAL ACHIEVED" at the start of ###OBS
+
+Examples of multi-command sequences:
+###CMD
+xdotool mousemove 500 300 click 1
+xdotool type "hello world"
+xdotool key Return
+
+###CMD
+wmctrl -a "Firefox"
+xdotool key ctrl+l
+xdotool type "https://google.com"
+xdotool key Return"""
 
 
 def build_prompt(goal: str, history_context: str, plat: str, width: int, height: int) -> str:
@@ -506,9 +586,12 @@ def build_prompt(goal: str, history_context: str, plat: str, width: int, height:
         raise RuntimeError(f"Unsupported platform: {plat}")
 
 
-def extract_blocks(text: str) -> Tuple[str, str, str]:
-    """Extract OBS, THINK, CMD blocks from model output."""
-    obs = think = cmd = ""
+def extract_blocks(text: str) -> Tuple[str, str, List[str]]:
+    """Extract OBS, THINK, CMD blocks from model output.
+    Returns (observation, thinking, commands_list).
+    """
+    obs = think = ""
+    commands: List[str] = []
 
     match = re.search(r'###OBS\s*\n(.*?)(?=###|$)', text, re.DOTALL)
     if match:
@@ -520,15 +603,15 @@ def extract_blocks(text: str) -> Tuple[str, str, str]:
 
     match = re.search(r'###CMD\s*\n(.*?)(?=###|$)', text, re.DOTALL)
     if match:
+        # Extract all non-empty lines as commands (up to 5)
         lines = [l.strip() for l in match.group(1).strip().split('\n') if l.strip()]
-        if lines:
-            cmd = lines[0]
+        commands = lines[:5]  # Limit to 5 commands max
 
-    return obs, think, cmd
+    return obs, think, commands
 
 
 def validate_command(cmd: str, plat: str) -> Tuple[bool, str]:
-    """Validate command for safety. Returns (is_valid, error_message)."""
+    """Validate a single command for safety. Returns (is_valid, error_message)."""
     if not cmd:
         return False, "Empty command"
 
@@ -536,7 +619,7 @@ def validate_command(cmd: str, plat: str) -> Tuple[bool, str]:
     if plat == Platform.MACOS:
         allowed_prefixes = ("cliclick", "osascript")
     elif plat == Platform.LINUX:
-        allowed_prefixes = ("xdotool", "wmctrl", "xclip")
+        allowed_prefixes = ("xdotool", "wmctrl", "xclip", "echo ")  # echo for xclip pipe
     else:
         return False, f"Unsupported platform: {plat}"
 
@@ -548,10 +631,10 @@ def validate_command(cmd: str, plat: str) -> Tuple[bool, str]:
                  "&&", "||", ";", "`", "$("]
 
     # Allow pipe only for xclip
-    if cmd.startswith("xclip") or "| xclip" in cmd:
+    if cmd.startswith("xclip") or "| xclip" in cmd or cmd.startswith("echo "):
         # Allow echo ... | xclip pattern
-        if not re.match(r'^echo\s+"[^"]*"\s*\|\s*xclip', cmd) and not cmd.startswith("xclip"):
-            pass  # Will be caught by dangerous check
+        if "| xclip" in cmd and not re.match(r'^echo\s+"[^"]*"\s*\|\s*xclip', cmd):
+            return False, "Invalid xclip pipe pattern"
     elif "|" in cmd:
         dangerous.append("|")
 
@@ -560,6 +643,19 @@ def validate_command(cmd: str, plat: str) -> Tuple[bool, str]:
             return False, f"Command contains forbidden pattern '{d}'"
 
     return True, ""
+
+
+def validate_commands(commands: List[str], plat: str) -> Tuple[bool, str, int]:
+    """Validate a list of commands. Returns (all_valid, error_message, failed_index)."""
+    if not commands:
+        return False, "No commands provided", -1
+
+    for i, cmd in enumerate(commands):
+        is_valid, error = validate_command(cmd, plat)
+        if not is_valid:
+            return False, f"Command {i+1}: {error}", i
+
+    return True, "", -1
 
 
 class LLMBackend:
@@ -644,7 +740,7 @@ IMPORTANT: Output ONLY the three blocks (###OBS, ###THINK, ###CMD) with no other
 
 
 def execute_command(cmd: str) -> Tuple[bool, str]:
-    """Execute a validated command. Returns (success, output)."""
+    """Execute a single validated command. Returns (success, output)."""
     log_file = LOG_DIR / f"cmd_{timestamp()}.out"
 
     try:
@@ -669,6 +765,30 @@ def execute_command(cmd: str) -> Tuple[bool, str]:
         return False, "TIMEOUT after 30s"
     except Exception as e:
         return False, f"ERROR: {str(e)}"
+
+
+def execute_commands(commands: List[str], delay: float = 0.3) -> List[Tuple[str, bool, str]]:
+    """
+    Execute a sequence of commands with delays between them.
+    Returns list of (command, success, result) tuples.
+    Stops execution on first failure.
+    """
+    results = []
+
+    for i, cmd in enumerate(commands):
+        log(f"  [{i+1}/{len(commands)}] {cmd}")
+        success, result = execute_command(cmd)
+        results.append((cmd, success, result))
+
+        if not success:
+            log(f"  Command failed, stopping sequence: {result}")
+            break
+
+        # Delay between commands (except after last)
+        if i < len(commands) - 1:
+            time.sleep(delay)
+
+    return results
 
 
 def get_backend(name: str, ssh_host: str = None, ssh_port: int = 25114) -> LLMBackend:
@@ -802,40 +922,45 @@ Platforms:
         # Save response
         MD_OUT.write_text(response)
 
-        # Extract blocks
-        observation, reasoning, command = extract_blocks(response)
+        # Extract blocks (now returns list of commands)
+        observation, reasoning, commands = extract_blocks(response)
 
         log(f"Observation: {observation[:100]}...")
         log(f"Reasoning: {reasoning[:100]}...")
-        log(f"Command: {command}")
+        log(f"Commands ({len(commands)}): {commands}")
 
         # Check for goal achieved
         if "GOAL ACHIEVED" in observation.upper():
             log("GOAL ACHIEVED!")
-            history.add_action(iteration, observation, reasoning, command, "Goal completed")
+            history.add_action(iteration, observation, reasoning, commands,
+                             [(commands[0] if commands else "goal", True, "Goal completed")])
             history.mark_completed()
             break
 
-        # Validate command
-        is_valid, error = validate_command(command, plat)
-        if not is_valid:
+        # Validate all commands before executing any
+        all_valid, error, failed_idx = validate_commands(commands, plat)
+        if not all_valid:
             log(f"ERROR: Invalid command - {error}")
             shutil.move(str(MD_OUT), str(PAST_DIR / f"model_invalid_{timestamp()}.md"))
-            history.add_action(iteration, observation, reasoning, command, f"REJECTED: {error}")
+            history.add_action(iteration, observation, reasoning, commands,
+                             [(commands[failed_idx] if failed_idx >= 0 else "N/A", False, f"REJECTED: {error}")])
             sys.exit(1)
 
-        # Execute command
-        log(f"Executing: {command}")
-        success, result = execute_command(command)
-        if not success:
-            log(f"WARNING: Command failed: {result}")
+        # Execute command sequence
+        log(f"Executing {len(commands)} command(s)...")
+        results = execute_commands(commands, delay=0.3)
 
-        # Update history
-        history.add_action(iteration, observation, reasoning, command, result)
+        # Check if all succeeded
+        all_succeeded = all(r[1] for r in results)
+        if not all_succeeded:
+            failed_cmd, _, failed_result = next((r for r in results if not r[1]), (None, None, None))
+            log(f"WARNING: Command sequence had failures")
 
-        # Small delay for UI updates
-        import time
-        time.sleep(1.5)
+        # Update history with all results
+        history.add_action(iteration, observation, reasoning, commands, results)
+
+        # Small delay for UI updates after command sequence
+        time.sleep(1.0)
 
     else:
         log(f"WARNING: Reached maximum iterations ({args.max_iter}) without achieving goal")

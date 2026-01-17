@@ -117,11 +117,33 @@ chmod +x agent.py
 1. **Detect Platform**: Identifies macOS or Linux, checks for required tools
 2. **Screenshot**: Captures screen using platform-appropriate tool
 3. **Analyze**: Sends screenshot + prompt + history to LLM
-4. **Parse**: Extracts observation, reasoning, and command from response
-5. **Validate**: Checks command safety (platform-specific allowed commands)
-6. **Execute**: Runs the command to interact with the system
+4. **Parse**: Extracts observation, reasoning, and command(s) from response
+5. **Validate**: Checks all commands for safety before execution
+6. **Execute**: Runs command sequence with delays (stops on first failure)
 7. **Record**: Saves action to history for context in next iteration
 8. **Loop**: Repeats until goal achieved or max iterations
+
+## Multi-Command Support
+
+The agent can execute **1-5 commands per LLM call** to reduce API calls and increase efficiency:
+
+- When the LLM is confident about a sequence of actions (e.g., click → type → press enter), it outputs multiple commands
+- Commands execute sequentially with a 300ms delay between them
+- Execution stops immediately on first failure
+- Single commands are used when visual verification is needed
+
+**Example multi-command output:**
+```
+###CMD
+cliclick c:500,300
+cliclick t:"hello world"
+cliclick kp:enter
+```
+
+This reduces LLM calls for predictable sequences like:
+- Opening apps and navigating to URLs
+- Filling forms (click field, type, tab to next)
+- Menu navigation (click menu, click item)
 
 ## Action History
 
@@ -138,9 +160,17 @@ The agent maintains structured JSON history (`action_history.json`) that tracks:
       "iteration": 1,
       "timestamp": "2024-01-15T10:30:05",
       "observation": "Desktop with dock visible at bottom",
-      "reasoning": "Need to click browser icon in the dock",
-      "command": "cliclick c:512,950",
-      "result": "OK"
+      "reasoning": "Need to open browser and navigate to search",
+      "commands": [
+        "cliclick c:512,950",
+        "cliclick kp:cmd-l",
+        "cliclick t:\"google.com\"",
+        "cliclick kp:enter"
+      ],
+      "commands_count": 4,
+      "executed_count": 4,
+      "all_succeeded": true,
+      "result_summary": "[OK] OK | [OK] OK | [OK] OK | [OK] OK"
     }
   ]
 }
