@@ -1,0 +1,38 @@
+# Screenshots and temporary files
+*.png
+*.jpg
+*.jpeg
+currentscreen.md
+
+# Logs
+logs/
+*.log
+
+# Action history (contains runtime state)
+action_history.json
+action_history.txt
+
+# Past screens archive
+past_screens/
+
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.env
+.venv
+env/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
