@@ -398,7 +398,8 @@ class ActionHistory:
             "started_at": datetime.now().isoformat(),
             "status": "in_progress",
             "iterations": 0,
-            "actions": []
+            "actions": [],
+            "notes": {}  # Key-value store for agent notes
         }
         self._save()
 
@@ -464,6 +465,25 @@ class ActionHistory:
         with open(self.txt_path, "a") as f:
             f.write(f"\n## Goal Achieved at {datetime.now()}\n")
 
+    def add_notes(self, notes: Dict[str, str]):
+        """Add or update notes in the history."""
+        if "notes" not in self.data:
+            self.data["notes"] = {}
+
+        for key, value in notes.items():
+            self.data["notes"][key] = value
+            log(f"Note stored: {key} = {value[:50]}{'...' if len(value) > 50 else ''}")
+
+        self._save()
+
+        with open(self.txt_path, "a") as f:
+            for key, value in notes.items():
+                f.write(f"\n**Note [{key}]:** {value}\n")
+
+    def get_notes(self) -> Dict[str, str]:
+        """Get all stored notes."""
+        return self.data.get("notes", {})
+
     def get_context(self, max_actions: int = 10) -> str:
         lines = [
             f"Goal: {self.data['goal']}",
@@ -498,6 +518,14 @@ class ActionHistory:
                     lines.append(f"      Reasoning: {reasoning[:150]}...")
         else:
             lines.append("No actions taken yet.")
+
+        # Include stored notes
+        notes = self.data.get("notes", {})
+        if notes:
+            lines.append("")
+            lines.append("Stored notes:")
+            for key, value in notes.items():
+                lines.append(f"  [{key}]: {value}")
 
         return "\n".join(lines)
 
@@ -535,13 +563,19 @@ You are an autonomous screen agent controlling a Mac. You interact using **clicl
 {history_context}
 
 # OUTPUT FORMAT (MUST FOLLOW EXACTLY)
-Respond with exactly these three blocks:
+Respond with these blocks (###NOTE is optional):
 
 ###OBS
 <What you observe in the screenshot - 1-2 sentences>
 
 ###THINK
 <Your reasoning about what to do next. Plan a sequence of actions if you're confident about multiple steps.>
+
+###NOTE (optional)
+<key1>: <value1>
+<key2>: <value2>
+Use this to store information you discover (URLs, keys, passwords, IDs, etc.) for later use.
+Notes persist across iterations and are shown in Context above.
 
 ###CMD
 <One command per line, 1-5 commands total. Each must start with 'cliclick' or 'osascript'>
@@ -553,6 +587,7 @@ Rules:
 - Use single command when outcome is uncertain or needs visual verification
 - No semicolons, pipes, redirects, or command chaining within a line
 - Commands execute sequentially with a small delay between them
+- Use ###NOTE to save important information (URLs, credentials, IDs) you'll need later
 - If goal is achieved, write: cliclick kp:escape
   And include "GOAL ACHIEVED" at the start of ###OBS"""
 
@@ -622,13 +657,19 @@ You are an autonomous screen agent controlling a Linux desktop. You interact usi
 {history_context}
 
 # OUTPUT FORMAT (MUST FOLLOW EXACTLY)
-Respond with exactly these three blocks:
+Respond with these blocks (###NOTE is optional):
 
 ###OBS
 <What you observe in the screenshot - 1-2 sentences>
 
 ###THINK
 <Your reasoning about what to do next. Plan a sequence of actions if you're confident about multiple steps.>
+
+###NOTE (optional)
+<key1>: <value1>
+<key2>: <value2>
+Use this to store information you discover (URLs, keys, passwords, IDs, etc.) for later use.
+Notes persist across iterations and are shown in Context above.
 
 ###CMD
 <One command per line, 1-5 commands total. Each must start with {allowed_tools}>
@@ -640,6 +681,7 @@ Rules:
 - Use single command when outcome is uncertain or needs visual verification
 - No semicolons, pipes, redirects, or command chaining within a line
 - Commands execute sequentially with a small delay between them
+- Use ###NOTE to save important information (URLs, credentials, IDs) you'll need later
 - If goal is achieved, write: {escape_cmd}
   And include "GOAL ACHIEVED" at the start of ###OBS
 
@@ -657,10 +699,11 @@ def build_prompt(goal: str, history_context: str, plat: str, width: int, height:
         raise RuntimeError(f"Unsupported platform: {plat}")
 
 
-def extract_blocks(text: str) -> Tuple[str, str, List[str]]:
-    """Extract OBS, THINK, CMD blocks from model output."""
+def extract_blocks(text: str) -> Tuple[str, str, List[str], Dict[str, str]]:
+    """Extract OBS, THINK, CMD, NOTE blocks from model output."""
     obs = think = ""
     commands: List[str] = []
+    notes: Dict[str, str] = {}
 
     match = re.search(r'###OBS\s*\n(.*?)(?=###|$)', text, re.DOTALL)
     if match:
@@ -670,12 +713,25 @@ def extract_blocks(text: str) -> Tuple[str, str, List[str]]:
     if match:
         think = match.group(1).strip()
 
+    match = re.search(r'###NOTE[^\n]*\n(.*?)(?=###|$)', text, re.DOTALL)
+    if match:
+        note_text = match.group(1).strip()
+        # Parse key: value pairs
+        for line in note_text.split('\n'):
+            line = line.strip()
+            if ':' in line and not line.startswith('<'):  # Skip template lines
+                key, _, value = line.partition(':')
+                key = key.strip()
+                value = value.strip()
+                if key and value:
+                    notes[key] = value
+
     match = re.search(r'###CMD\s*\n(.*?)(?=###|$)', text, re.DOTALL)
     if match:
         lines = [l.strip() for l in match.group(1).strip().split('\n') if l.strip()]
         commands = lines[:5]
 
-    return obs, think, commands
+    return obs, think, commands, notes
 
 
 def validate_command(cmd: str, plat: str, input_tool: str = None) -> Tuple[bool, str]:
@@ -1130,11 +1186,16 @@ Platforms:
         MD_OUT.write_text(response)
 
         # Extract blocks
-        observation, reasoning, commands = extract_blocks(response)
+        observation, reasoning, commands, notes = extract_blocks(response)
 
         log(f"Observation: {observation[:100]}...")
         log(f"Reasoning: {reasoning[:100]}...")
         log(f"Commands ({len(commands)}): {commands}")
+
+        # Store any notes from this iteration
+        if notes:
+            log(f"Notes ({len(notes)}): {list(notes.keys())}")
+            history.add_notes(notes)
 
         # Check for goal achieved
         if "GOAL ACHIEVED" in observation.upper():

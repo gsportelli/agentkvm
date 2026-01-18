@@ -13,6 +13,7 @@ A cross-platform PC automation agent that uses screenshots and LLM to control yo
   - Linux Wayland: `ydotool` + `grim`
 - **Multi-command execution**: 1-5 commands per LLM call for efficiency
 - **Action history**: JSON-structured history provides context across iterations
+- **Notes storage**: Agent can store and retrieve information (URLs, keys, etc.) across iterations
 - **Interactive model selection**: Prompts for model if not specified
 - **Safety validation**: Commands are validated before execution
 
@@ -146,12 +147,13 @@ chmod +x agent.py
 1. **Detect Platform**: Identifies macOS or Linux (X11/Wayland), checks for required tools
 2. **Select Model**: If no model specified, shows available vision models to choose from
 3. **Screenshot**: Captures screen using platform-appropriate tool
-4. **Analyze**: Sends screenshot + prompt + history to LLM
-5. **Parse**: Extracts observation, reasoning, and command(s) from response
-6. **Validate**: Checks all commands for safety before execution
-7. **Execute**: Runs command sequence with delays (stops on first failure)
-8. **Record**: Saves action to history for context in next iteration
-9. **Loop**: Repeats until goal achieved or max iterations
+4. **Analyze**: Sends screenshot + prompt + history + notes to LLM
+5. **Parse**: Extracts observation, reasoning, notes, and command(s) from response
+6. **Store Notes**: Saves any notes (key-value pairs) for future iterations
+7. **Validate**: Checks all commands for safety before execution
+8. **Execute**: Runs command sequence with delays (stops on first failure)
+9. **Record**: Saves action to history for context in next iteration
+10. **Loop**: Repeats until goal achieved or max iterations
 
 ## Multi-Command Support
 
@@ -164,6 +166,19 @@ ydotool click 0xC0
 ydotool type "hello world"
 ydotool key enter
 ```
+
+## Notes Storage
+
+The agent can store information it discovers during execution for later use. This is useful for multi-step tasks where the agent needs to remember URLs, keys, credentials, or other data:
+
+```
+###NOTE
+api_key: sk-abc123xyz
+dashboard_url: https://example.com/dashboard
+username: admin@example.com
+```
+
+Notes persist across iterations and are automatically included in the context shown to the LLM. The agent can reference stored notes in later iterations to use the information it gathered earlier.
 
 ## Available Commands
 
