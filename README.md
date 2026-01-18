@@ -49,8 +49,8 @@ sudo apt install ydotool
 sudo systemctl enable --now ydotool
 
 # Screenshot tool
-sudo apt install grim               # Recommended for Wayland
-sudo apt install gnome-screenshot   # Alternative
+sudo apt install gnome-screenshot   # Recommended for Wayland
+sudo apt install grim               # Alternative
 
 # Optional
 sudo apt install wl-clipboard       # Clipboard (wl-copy/wl-paste)
@@ -302,8 +302,8 @@ sudo usermod -aG input $USER
 ### No screenshot on Wayland
 
 ```bash
-# Install grim for Wayland screenshots
-sudo apt install grim
+# Install gnome-screenshot for Wayland screenshots (recommended)
+sudo apt install gnome-screenshot
 ```
 
 ### cliclick permission denied (macOS)

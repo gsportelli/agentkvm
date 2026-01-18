@@ -237,8 +237,8 @@ def check_dependencies(plat: str, backend: str, display_server: str = None) -> T
             if display_server == DisplayServer.WAYLAND:
                 missing_required.append(
                     "  - Screenshot tool (install ONE of the following):\n"
-                    "    - grim: sudo apt install grim (recommended for Wayland)\n"
-                    "    - gnome-screenshot: sudo apt install gnome-screenshot"
+                    "    - gnome-screenshot: sudo apt install gnome-screenshot (recommended)\n"
+                    "    - grim: sudo apt install grim"
                 )
             else:
                 missing_required.append(
@@ -350,12 +350,12 @@ def take_screenshot(plat: str, display_server: str = None) -> Path:
     elif plat == Platform.LINUX:
         # Try screenshot tools in order of preference based on display server
         if display_server == DisplayServer.WAYLAND:
-            if check_command_exists("grim"):
-                subprocess.run(["grim", str(SCREENSHOT)], check=True)
-            elif check_command_exists("gnome-screenshot"):
+            if check_command_exists("gnome-screenshot"):
                 subprocess.run(["gnome-screenshot", "-f", str(SCREENSHOT)], check=True)
+            elif check_command_exists("grim"):
+                subprocess.run(["grim", str(SCREENSHOT)], check=True)
             else:
-                raise RuntimeError("No Wayland screenshot tool available (install grim)")
+                raise RuntimeError("No Wayland screenshot tool available (install gnome-screenshot)")
         else:
             if check_command_exists("scrot"):
                 subprocess.run(["scrot", str(SCREENSHOT)], check=True)
