@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 AgentKVM - PC automation agent using screenshots and LLM
-Supports multiple backends: ollama, codex, claude
+Supports multiple backends: openai (Ollama, vLLM, etc.), codex, claude
 Cross-platform: macOS and Linux (X11 and Wayland)
 """
 
@@ -166,9 +166,9 @@ DEPENDENCIES: Dict[str, Dict[str, dict]] = {
     },
 }
 
-# Backend-specific dependencies (no longer need aiocr)
+# Backend-specific dependencies
 BACKEND_DEPENDENCIES = {
-    "ollama": {},  # No external deps, just needs Ollama running
+    "openai": {},  # No external deps, just needs OpenAI-compatible API running
     "codex": {
         "codex": {
             "check": "codex",
@@ -724,8 +724,8 @@ class LLMBackend:
         raise NotImplementedError
 
 
-class OllamaBackend(LLMBackend):
-    """Backend using Ollama API directly."""
+class OpenAIBackend(LLMBackend):
+    """Backend using OpenAI-compatible API (works with Ollama, vLLM, etc.)."""
 
     def __init__(self, host: str = "localhost", port: int = 11434, model: str = None):
         self.host = host
@@ -734,8 +734,9 @@ class OllamaBackend(LLMBackend):
         self.base_url = f"http://{host}:{port}"
 
     def list_models(self) -> List[str]:
-        """List available vision models from Ollama."""
+        """List available models from the API."""
         try:
+            # Try Ollama-style endpoint first
             url = f"{self.base_url}/api/tags"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -745,14 +746,34 @@ class OllamaBackend(LLMBackend):
                 vision_keywords = ["vision", "llava", "bakllava", "moondream", "minicpm-v", "qwen"]
                 vision_models = [m for m in models if any(k in m.lower() for k in vision_keywords)]
                 return vision_models if vision_models else models
+        except Exception:
+            pass
+
+        try:
+            # Try OpenAI-style endpoint
+            url = f"{self.base_url}/v1/models"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                return [m["id"] for m in data.get("data", [])]
         except Exception as e:
             log(f"Failed to list models: {e}", verbose_only=True)
             return []
 
     def check_connection(self) -> bool:
-        """Check if Ollama is reachable."""
+        """Check if API is reachable."""
         try:
+            # Try Ollama endpoint
             url = f"{self.base_url}/api/tags"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status == 200
+        except Exception:
+            pass
+
+        try:
+            # Try OpenAI endpoint
+            url = f"{self.base_url}/v1/models"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.status == 200
@@ -760,12 +781,22 @@ class OllamaBackend(LLMBackend):
             return False
 
     def call(self, prompt: str, screenshot_path: Path) -> str:
-        log(f"Calling Ollama ({self.model}) at {self.host}:{self.port}...", verbose_only=True)
+        log(f"Calling OpenAI API ({self.model}) at {self.host}:{self.port}...", verbose_only=True)
 
         # Encode image
         image_b64 = image_to_base64(screenshot_path)
 
-        # Build request
+        # Try Ollama-style API first (simpler for vision)
+        try:
+            return self._call_ollama_api(prompt, image_b64)
+        except Exception:
+            pass
+
+        # Fallback to OpenAI-style API
+        return self._call_openai_api(prompt, image_b64)
+
+    def _call_ollama_api(self, prompt: str, image_b64: str) -> str:
+        """Call Ollama-style /api/generate endpoint."""
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -782,12 +813,40 @@ class OllamaBackend(LLMBackend):
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
 
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read().decode())
+            return result.get("response", "")
+
+    def _call_openai_api(self, prompt: str, image_b64: str) -> str:
+        """Call OpenAI-style /v1/chat/completions endpoint."""
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{image_b64}"}
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096,
+        }
+
+        url = f"{self.base_url}/v1/chat/completions"
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 result = json.loads(resp.read().decode())
-                return result.get("response", "")
+                return result["choices"][0]["message"]["content"]
         except urllib.error.URLError as e:
-            raise RuntimeError(f"Ollama request failed: {e}")
+            raise RuntimeError(f"OpenAI API request failed: {e}")
 
 
 class CodexBackend(LLMBackend):
@@ -874,18 +933,18 @@ def execute_commands(commands: List[str], delay: float = 0.3) -> List[Tuple[str,
     return results
 
 
-def select_model_interactive(backend: OllamaBackend) -> str:
+def select_model_interactive(backend: OpenAIBackend) -> str:
     """Interactively select a model from available options."""
     models = backend.list_models()
 
     if not models:
-        print("No models found. Please pull a vision model first:")
+        print("No models found. Please ensure a vision model is available.")
+        print("For Ollama, run:")
         print("  ollama pull llava")
         print("  ollama pull moondream")
-        print("  ollama pull minicpm-v")
         sys.exit(1)
 
-    print("\nAvailable vision models:")
+    print("\nAvailable models:")
     for i, model in enumerate(models, 1):
         print(f"  {i}. {model}")
 
@@ -902,15 +961,15 @@ def select_model_interactive(backend: OllamaBackend) -> str:
 
 def get_backend(name: str, host: str = None, port: int = None, model: str = None) -> LLMBackend:
     """Factory function to create LLM backend."""
-    if name == "ollama":
-        host = host or os.environ.get("OLLAMA_HOST", "localhost")
-        port = port or int(os.environ.get("OLLAMA_PORT", "11434"))
-        backend = OllamaBackend(host, port, model)
+    if name == "openai":
+        host = host or os.environ.get("OPENAI_API_HOST", "localhost")
+        port = port or int(os.environ.get("OPENAI_API_PORT", "11434"))
+        backend = OpenAIBackend(host, port, model)
 
         # Check connection
         if not backend.check_connection():
-            print(f"Error: Cannot connect to Ollama at {host}:{port}")
-            print("Make sure Ollama is running: ollama serve")
+            print(f"Error: Cannot connect to OpenAI API at {host}:{port}")
+            print("Make sure your API server is running (e.g., ollama serve)")
             sys.exit(1)
 
         # Select model if not specified
@@ -918,7 +977,7 @@ def get_backend(name: str, host: str = None, port: int = None, model: str = None
             model = select_model_interactive(backend)
             backend.model = model
 
-        log(f"Using Ollama model: {model}")
+        log(f"Using model: {model}")
         return backend
 
     elif name == "codex":
@@ -937,16 +996,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s -b ollama --model llava "Open Firefox and search for weather"
-  %(prog)s -b ollama --host 192.168.1.100 --port 11434 "Open browser"
+  %(prog)s --model llava "Open Firefox and search for weather"
+  %(prog)s --host 192.168.1.100 --port 11434 --model llava "Open browser"
   %(prog)s -b claude "Open Safari and search for weather"
   %(prog)s -b codex "Click the Settings icon"
   %(prog)s --check-deps  # Check dependencies without running
 
 Backends:
-  ollama    Use Ollama API directly (default)
-  codex     Use OpenAI Codex CLI
-  claude    Use Claude CLI
+  openai    OpenAI-compatible API (Ollama, vLLM, etc.) - default
+  codex     OpenAI Codex CLI
+  claude    Claude CLI
 
 Platforms:
   macOS     Uses cliclick, osascript, screencapture
@@ -954,15 +1013,15 @@ Platforms:
 """
     )
     parser.add_argument("goal", nargs="?", help="The goal for the agent to achieve")
-    parser.add_argument("-b", "--backend", default="ollama",
-                        choices=["ollama", "codex", "claude"],
-                        help="LLM backend (default: ollama)")
+    parser.add_argument("-b", "--backend", default="openai",
+                        choices=["openai", "codex", "claude"],
+                        help="LLM backend (default: openai)")
     parser.add_argument("--host", default=None,
-                        help="Ollama host (default: localhost, or OLLAMA_HOST env)")
+                        help="OpenAI API host (default: localhost, or OPENAI_API_HOST env)")
     parser.add_argument("--port", type=int, default=None,
-                        help="Ollama port (default: 11434, or OLLAMA_PORT env)")
+                        help="OpenAI API port (default: 11434, or OPENAI_API_PORT env)")
     parser.add_argument("--model", default=None,
-                        help="Ollama model to use (will prompt if not specified)")
+                        help="Model to use (will prompt if not specified)")
     parser.add_argument("-m", "--max-iter", type=int, default=50,
                         help="Maximum iterations (default: 50)")
     parser.add_argument("-r", "--reset", action="store_true",

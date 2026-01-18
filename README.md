@@ -5,7 +5,7 @@ A cross-platform PC automation agent that uses screenshots and LLM to control yo
 ## Features
 
 - **Cross-platform**: Works on macOS and Linux (X11 and Wayland)
-- **Multi-backend LLM support**: Ollama (local), Codex CLI, Claude CLI
+- **Multi-backend LLM support**: OpenAI-compatible API (Ollama, vLLM, etc.), Codex CLI, Claude CLI
 - **Visual understanding**: Takes screenshots and sends to vision-capable LLMs
 - **Platform-aware control**:
   - macOS: `cliclick` + `osascript`
@@ -55,10 +55,12 @@ sudo apt install gnome-screenshot   # Alternative
 sudo apt install wl-clipboard       # Clipboard (wl-copy/wl-paste)
 ```
 
-### Ollama (default backend)
+### OpenAI-compatible API (default backend)
+
+The default backend uses any OpenAI-compatible API server (Ollama, vLLM, etc.)
 
 ```bash
-# Install Ollama
+# Example: Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
 # Pull a vision model
@@ -92,13 +94,13 @@ chmod +x agent.py
 ## Usage
 
 ```bash
-# Using Ollama (will prompt for model selection)
+# Using OpenAI-compatible API (will prompt for model selection)
 ./agent.py "Open Firefox and search for weather"
 
 # Specify model directly
 ./agent.py --model llava "Open browser and go to google.com"
 
-# Connect to remote Ollama
+# Connect to remote API server
 ./agent.py --host 192.168.1.100 --port 11434 --model llava "Open terminal"
 
 # Using Claude CLI
@@ -121,10 +123,10 @@ chmod +x agent.py
 
 | Option | Description |
 |--------|-------------|
-| `-b, --backend` | LLM backend: `ollama`, `codex`, `claude` (default: ollama) |
-| `--host` | Ollama host (default: localhost, or OLLAMA_HOST env) |
-| `--port` | Ollama port (default: 11434, or OLLAMA_PORT env) |
-| `--model` | Ollama model to use (will prompt if not specified) |
+| `-b, --backend` | LLM backend: `openai`, `codex`, `claude` (default: openai) |
+| `--host` | OpenAI API host (default: localhost, or OPENAI_API_HOST env) |
+| `--port` | OpenAI API port (default: 11434, or OPENAI_API_PORT env) |
+| `--model` | Model to use (will prompt if not specified) |
 | `-m, --max-iter` | Maximum iterations (default: 50) |
 | `-r, --reset` | Reset action history before starting |
 | `-v, --verbose` | Verbose output |
@@ -135,8 +137,8 @@ chmod +x agent.py
 
 | Variable | Description |
 |----------|-------------|
-| `OLLAMA_HOST` | Default Ollama host |
-| `OLLAMA_PORT` | Default Ollama port |
+| `OPENAI_API_HOST` | Default API host |
+| `OPENAI_API_PORT` | Default API port |
 
 ## How It Works
 
@@ -212,12 +214,12 @@ ydotool key super               # Super key
 ### Model Selection
 
 If `--model` is not specified, the agent will:
-1. Connect to Ollama
-2. List available vision models (filtered by keywords: vision, llava, moondream, etc.)
+1. Connect to the API server
+2. List available models
 3. Prompt you to select one
 
 ```
-Available vision models:
+Available models:
   1. llava:latest
   2. moondream:latest
   3. minicpm-v:latest
@@ -252,10 +254,10 @@ Commands are validated before execution:
 
 ## Troubleshooting
 
-### Cannot connect to Ollama
+### Cannot connect to API server
 
 ```bash
-# Make sure Ollama is running
+# For Ollama, make sure it's running
 ollama serve
 
 # Check if it's accessible
