@@ -4,14 +4,16 @@ A cross-platform PC automation agent that uses screenshots and LLM to control yo
 
 ## Features
 
-- **Cross-platform**: Works on macOS and Linux (Debian/Ubuntu)
-- **Multi-backend LLM support**: SSH-GPU (Ollama/qwen), Codex CLI, Claude CLI
+- **Cross-platform**: Works on macOS and Linux (X11 and Wayland)
+- **Multi-backend LLM support**: Ollama (local), Codex CLI, Claude CLI
 - **Visual understanding**: Takes screenshots and sends to vision-capable LLMs
 - **Platform-aware control**:
   - macOS: `cliclick` + `osascript`
-  - Linux: `xdotool` + `wmctrl` + `xclip`
+  - Linux X11: `xdotool` + `wmctrl`
+  - Linux Wayland: `ydotool` + `grim`
+- **Multi-command execution**: 1-5 commands per LLM call for efficiency
 - **Action history**: JSON-structured history provides context across iterations
-- **Dependency checking**: Automatically checks for required tools on first run
+- **Interactive model selection**: Prompts for model if not specified
 - **Safety validation**: Commands are validated before execution
 
 ## Requirements
@@ -21,38 +23,54 @@ A cross-platform PC automation agent that uses screenshots and LLM to control yo
 ```bash
 # Required
 brew install cliclick
-
-# Built-in (no install needed)
-# - screencapture
-# - osascript
 ```
 
-### Linux (Debian/Ubuntu)
+### Linux (X11)
 
 ```bash
-# Required
+# Input tool
 sudo apt install xdotool
 
-# Screenshot tool (install ONE)
+# Screenshot tool (one of)
 sudo apt install scrot              # Recommended
-# OR
-sudo apt install gnome-screenshot   # For GNOME
-# OR
-sudo apt install imagemagick        # Provides 'import' command
+sudo apt install gnome-screenshot
 
-# Optional (for advanced features)
+# Optional
 sudo apt install wmctrl             # Window management
-sudo apt install xclip              # Clipboard operations
+sudo apt install xclip              # Clipboard
 ```
 
-### LLM Backends
-
-Install one of the following based on your chosen backend:
+### Linux (Wayland)
 
 ```bash
-# For ssh-gpu backend
-# Install aiocr from https://github.com/gsportelli/aiocr
+# Input tool (requires ydotoold service)
+sudo apt install ydotool
+sudo systemctl enable --now ydotool
 
+# Screenshot tool
+sudo apt install grim               # Recommended for Wayland
+sudo apt install gnome-screenshot   # Alternative
+
+# Optional
+sudo apt install wl-clipboard       # Clipboard (wl-copy/wl-paste)
+```
+
+### Ollama (default backend)
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull a vision model
+ollama pull llava
+# or
+ollama pull moondream
+ollama pull minicpm-v
+```
+
+### Alternative backends
+
+```bash
 # For codex backend
 npm install -g @openai/codex
 
@@ -68,38 +86,45 @@ cd agentkvm
 chmod +x agent.py
 
 # Check dependencies
-./agent.py --check-deps -b claude
+./agent.py --check-deps
 ```
 
 ## Usage
 
 ```bash
-# Using Claude CLI
-./agent.py -b claude "Open Firefox and search for weather"
+# Using Ollama (will prompt for model selection)
+./agent.py "Open Firefox and search for weather"
 
-# Using SSH-GPU backend
-./agent.py -b ssh-gpu --ssh-host gpu.example.com "Open Gmail in browser"
+# Specify model directly
+./agent.py --model llava "Open browser and go to google.com"
+
+# Connect to remote Ollama
+./agent.py --host 192.168.1.100 --port 11434 --model llava "Open terminal"
+
+# Using Claude CLI
+./agent.py -b claude "Open Safari and search for weather"
 
 # Using Codex
-./agent.py -b codex "Click the Settings icon and enable dark mode"
+./agent.py -b codex "Click the Settings icon"
 
 # With verbose output
-./agent.py -b claude -v "Open Terminal"
+./agent.py -v --model llava "Open file manager"
 
 # Reset history and start fresh
-./agent.py -b claude -r "Open file manager"
+./agent.py -r --model moondream "Open browser"
 
 # Check dependencies only
-./agent.py --check-deps -b ssh-gpu
+./agent.py --check-deps
 ```
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `-b, --backend` | LLM backend: `ssh-gpu`, `codex`, `claude` (default: ssh-gpu) |
-| `--ssh-host` | SSH host for ssh-gpu backend |
-| `--ssh-port` | SSH port for Ollama (default: 25114) |
+| `-b, --backend` | LLM backend: `ollama`, `codex`, `claude` (default: ollama) |
+| `--host` | Ollama host (default: localhost, or OLLAMA_HOST env) |
+| `--port` | Ollama port (default: 11434, or OLLAMA_PORT env) |
+| `--model` | Ollama model to use (will prompt if not specified) |
 | `-m, --max-iter` | Maximum iterations (default: 50) |
 | `-r, --reset` | Reset action history before starting |
 | `-v, --verbose` | Verbose output |
@@ -110,137 +135,95 @@ chmod +x agent.py
 
 | Variable | Description |
 |----------|-------------|
-| `SSH_GPU_HOST` | Default SSH host for ssh-gpu backend |
+| `OLLAMA_HOST` | Default Ollama host |
+| `OLLAMA_PORT` | Default Ollama port |
 
 ## How It Works
 
-1. **Detect Platform**: Identifies macOS or Linux, checks for required tools
-2. **Screenshot**: Captures screen using platform-appropriate tool
-3. **Analyze**: Sends screenshot + prompt + history to LLM
-4. **Parse**: Extracts observation, reasoning, and command(s) from response
-5. **Validate**: Checks all commands for safety before execution
-6. **Execute**: Runs command sequence with delays (stops on first failure)
-7. **Record**: Saves action to history for context in next iteration
-8. **Loop**: Repeats until goal achieved or max iterations
+1. **Detect Platform**: Identifies macOS or Linux (X11/Wayland), checks for required tools
+2. **Select Model**: If no model specified, shows available vision models to choose from
+3. **Screenshot**: Captures screen using platform-appropriate tool
+4. **Analyze**: Sends screenshot + prompt + history to LLM
+5. **Parse**: Extracts observation, reasoning, and command(s) from response
+6. **Validate**: Checks all commands for safety before execution
+7. **Execute**: Runs command sequence with delays (stops on first failure)
+8. **Record**: Saves action to history for context in next iteration
+9. **Loop**: Repeats until goal achieved or max iterations
 
 ## Multi-Command Support
 
-The agent can execute **1-5 commands per LLM call** to reduce API calls and increase efficiency:
+The agent can execute **1-5 commands per LLM call** to reduce API calls:
 
-- When the LLM is confident about a sequence of actions (e.g., click → type → press enter), it outputs multiple commands
-- Commands execute sequentially with a 300ms delay between them
-- Execution stops immediately on first failure
-- Single commands are used when visual verification is needed
-
-**Example multi-command output:**
 ```
 ###CMD
-cliclick c:500,300
-cliclick t:"hello world"
-cliclick kp:enter
+ydotool mousemove -a 500 300
+ydotool click 0xC0
+ydotool type "hello world"
+ydotool key enter
 ```
-
-This reduces LLM calls for predictable sequences like:
-- Opening apps and navigating to URLs
-- Filling forms (click field, type, tab to next)
-- Menu navigation (click menu, click item)
-
-## Action History
-
-The agent maintains structured JSON history (`action_history.json`) that tracks:
-
-```json
-{
-  "goal": "Open Firefox and search for weather",
-  "started_at": "2024-01-15T10:30:00",
-  "status": "in_progress",
-  "iterations": 3,
-  "actions": [
-    {
-      "iteration": 1,
-      "timestamp": "2024-01-15T10:30:05",
-      "observation": "Desktop with dock visible at bottom",
-      "reasoning": "Need to open browser and navigate to search",
-      "commands": [
-        "cliclick c:512,950",
-        "cliclick kp:cmd-l",
-        "cliclick t:\"google.com\"",
-        "cliclick kp:enter"
-      ],
-      "commands_count": 4,
-      "executed_count": 4,
-      "all_succeeded": true,
-      "result_summary": "[OK] OK | [OK] OK | [OK] OK | [OK] OK"
-    }
-  ]
-}
-```
-
-This history is included in each LLM prompt, giving the model memory of past actions.
 
 ## Available Commands
 
 ### macOS
 
-#### cliclick (mouse/keyboard)
+#### cliclick
 ```bash
-cliclick m:x,y        # Move mouse to coordinates
+cliclick m:x,y        # Move mouse
 cliclick c:x,y        # Click at position
-cliclick c:.          # Click at current position
 cliclick dc:x,y       # Double-click
 cliclick rc:x,y       # Right-click
 cliclick t:"text"     # Type text
-cliclick kp:enter     # Press key (enter, tab, space, delete, escape)
-cliclick kp:cmd-l     # Key combo (cmd-l, cmd-t, cmd-w, cmd-a, cmd-c, cmd-v)
+cliclick kp:enter     # Press key
+cliclick kp:cmd-l     # Key combo
 ```
 
-#### osascript (AppleScript)
-```bash
-osascript -e 'tell application "Safari" to activate'
-osascript -e 'open location "https://example.com"'
-```
+### Linux (xdotool - X11)
 
-### Linux
-
-#### xdotool (mouse/keyboard)
 ```bash
 xdotool mousemove x y           # Move mouse
 xdotool mousemove x y click 1   # Move and click
-xdotool click 1                 # Left click (1=left, 2=middle, 3=right)
+xdotool click 1                 # Left click (1=left, 3=right)
 xdotool type "text here"        # Type text
-xdotool key Return              # Press key (Return, Tab, Escape, etc.)
-xdotool key ctrl+l              # Key combo (ctrl+l, ctrl+t, alt+F4, etc.)
-xdotool key super               # Super/Windows key
+xdotool key Return              # Press key
+xdotool key ctrl+l              # Key combo
+xdotool key super               # Super key
 ```
 
-#### wmctrl (window management)
-```bash
-wmctrl -l                       # List windows
-wmctrl -a "Window Title"        # Activate window
-wmctrl -c "Window Title"        # Close window
-```
+### Linux (ydotool - Wayland)
 
-#### xclip (clipboard)
 ```bash
-echo "text" | xclip -selection clipboard  # Copy to clipboard
-xclip -selection clipboard -o             # Paste from clipboard
+ydotool mousemove -a x y        # Move mouse (absolute)
+ydotool click 0xC0              # Left click
+ydotool click 0xC1              # Right click
+ydotool type "text here"        # Type text
+ydotool key enter               # Press key
+ydotool key ctrl+l              # Key combo
+ydotool key super               # Super key
 ```
 
 ## Platform Notes
 
-### Wayland (Linux)
+### Wayland
 
-If running on Wayland, xdotool has limited functionality. The agent will warn you about this. For better Wayland support, consider:
-- Running under XWayland
-- Using `ydotool` instead (requires separate setup)
+- Uses `ydotool` instead of `xdotool` (works natively on Wayland)
+- Uses `grim` for screenshots
+- Requires `ydotoold` service running: `sudo systemctl enable --now ydotool`
 
-### Screen Resolution
+### Model Selection
 
-The agent automatically detects screen resolution:
-- macOS: via `system_profiler`
-- Linux: via `xdpyinfo`
+If `--model` is not specified, the agent will:
+1. Connect to Ollama
+2. List available vision models (filtered by keywords: vision, llava, moondream, etc.)
+3. Prompt you to select one
 
-Falls back to 1920x1080 if detection fails.
+```
+Available vision models:
+  1. llava:latest
+  2. moondream:latest
+  3. minicpm-v:latest
+
+Select model (1-3):
+```
 
 ## Safety
 
@@ -248,10 +231,11 @@ Commands are validated before execution:
 
 **Allowed commands:**
 - macOS: `cliclick`, `osascript`
-- Linux: `xdotool`, `wmctrl`, `xclip`
+- Linux (X11): `xdotool`, `wmctrl`
+- Linux (Wayland): `ydotool`, `wmctrl`
 
 **Blocked patterns:**
-- Shell metacharacters: `; && || > >> | \` $()`
+- Shell metacharacters: `; && || >> \` $()`
 - Dangerous commands: `rm`, `sudo`, `curl`, `wget`, `kill`
 
 ## Files
@@ -259,7 +243,6 @@ Commands are validated before execution:
 | File | Description |
 |------|-------------|
 | `agent.py` | Main agent script (Python) |
-| `agent.sh` | Legacy bash version (macOS only) |
 | `action_history.json` | Structured action history (JSON) |
 | `action_history.txt` | Human-readable action history |
 | `currentscreen.png` | Latest screenshot |
@@ -269,31 +252,41 @@ Commands are validated before execution:
 
 ## Troubleshooting
 
-### Missing dependencies
-
-Run `./agent.py --check-deps -b <backend>` to see what's missing and get install instructions.
-
-### xdotool not working on Wayland
+### Cannot connect to Ollama
 
 ```bash
-# Check display server
-echo $XDG_SESSION_TYPE
+# Make sure Ollama is running
+ollama serve
 
-# If "wayland", try running app under XWayland or switch to X11 session
+# Check if it's accessible
+curl http://localhost:11434/api/tags
 ```
 
-### Permission denied for screenshot (Linux)
+### ydotool not working
 
-Some desktop environments require additional permissions. Try:
 ```bash
-# For GNOME
-gsettings set org.gnome.desktop.privacy disable-microphone true
+# Check if ydotoold is running
+systemctl status ydotool
+
+# Enable and start service
+sudo systemctl enable --now ydotool
+
+# You may need to add user to input group
+sudo usermod -aG input $USER
+# Then logout and login
 ```
 
-### cliclick not clicking correctly (macOS)
+### No screenshot on Wayland
 
-Ensure accessibility permissions are granted:
+```bash
+# Install grim for Wayland screenshots
+sudo apt install grim
+```
+
+### cliclick permission denied (macOS)
+
 System Preferences > Security & Privacy > Privacy > Accessibility
+Add Terminal (or your terminal app) to the list.
 
 ## License
 
