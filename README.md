@@ -130,6 +130,7 @@ chmod +x agent.py
 | `-m, --max-iter` | Maximum iterations (default: 50) |
 | `-r, --reset` | Reset action history before starting |
 | `-v, --verbose` | Verbose output |
+| `-w, --workdir` | Working directory for output files (default: current directory) |
 | `--check-deps` | Check dependencies and exit |
 | `-h, --help` | Show help |
 
@@ -245,6 +246,11 @@ Commands are validated before execution:
 | File | Description |
 |------|-------------|
 | `agent.py` | Main agent script (Python) |
+
+**Output files** (written to working directory, configurable with `--workdir`):
+
+| File | Description |
+|------|-------------|
 | `action_history.json` | Structured action history (JSON) |
 | `action_history.txt` | Human-readable action history |
 | `currentscreen.png` | Latest screenshot |

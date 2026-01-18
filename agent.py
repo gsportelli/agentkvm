@@ -21,16 +21,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-ACTION_HISTORY_FILE = SCRIPT_DIR / "action_history.json"
-ACTION_HISTORY_TXT = SCRIPT_DIR / "action_history.txt"
-SCREENSHOT = SCRIPT_DIR / "currentscreen.png"
-MD_OUT = SCRIPT_DIR / "currentscreen.md"
-PAST_DIR = SCRIPT_DIR / "past_screens"
-LOG_DIR = SCRIPT_DIR / "logs"
+# Working directory for output files (set by init_paths)
+WORK_DIR = None
+ACTION_HISTORY_FILE = None
+ACTION_HISTORY_TXT = None
+SCREENSHOT = None
+MD_OUT = None
+PAST_DIR = None
+LOG_DIR = None
 
 # Global verbose flag
 VERBOSE = False
+
+
+def init_paths(workdir: Path = None):
+    """Initialize output paths. Uses cwd if workdir not specified."""
+    global WORK_DIR, ACTION_HISTORY_FILE, ACTION_HISTORY_TXT, SCREENSHOT, MD_OUT, PAST_DIR, LOG_DIR
+
+    WORK_DIR = Path(workdir).resolve() if workdir else Path.cwd()
+    ACTION_HISTORY_FILE = WORK_DIR / "action_history.json"
+    ACTION_HISTORY_TXT = WORK_DIR / "action_history.txt"
+    SCREENSHOT = WORK_DIR / "currentscreen.png"
+    MD_OUT = WORK_DIR / "currentscreen.md"
+    PAST_DIR = WORK_DIR / "past_screens"
+    LOG_DIR = WORK_DIR / "logs"
 
 # Platform detection
 class Platform:
@@ -1028,11 +1042,17 @@ Platforms:
                         help="Reset action history before starting")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Verbose output")
+    parser.add_argument("-w", "--workdir", default=None,
+                        help="Working directory for output files (default: current directory)")
     parser.add_argument("--check-deps", action="store_true",
                         help="Check dependencies and exit")
 
     args = parser.parse_args()
     VERBOSE = args.verbose
+
+    # Initialize output paths
+    init_paths(args.workdir)
+    log(f"Working directory: {WORK_DIR}")
 
     # Detect platform and display server
     plat = detect_platform()
